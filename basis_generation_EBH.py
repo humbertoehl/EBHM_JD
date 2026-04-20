@@ -312,6 +312,121 @@ def solve_mean_field(
     )
 
 
+def _single_site_operators(n_max):
+    dim = n_max + 1
+    b = np.zeros((dim, dim), dtype=complex)
+    for n in range(1, dim):
+        b[n - 1, n] = np.sqrt(n)
+    b_dag = b.conj().T
+    n_op = np.diag(np.arange(dim, dtype=float))
+    identity = np.eye(dim, dtype=complex)
+    return b, b_dag, n_op, identity
+
+
+def construct_full_basis(
+    mean_field_solution,
+    zt0_over_u,
+    mu,
+    g_eff,
+    j_d_abs_sq=1.0,
+    n_max=6,
+    num_sites=100,
+    z=4,
+    U=1.0,
+):
+    """
+    Construye el Hamiltoniano mean-field completo en la base Fock bipartita
+    |n_odd, n_even> para un corte n_max y lo diagonaliza.
+
+    Parámetros
+    ----------
+    mean_field_solution : tuple
+        Salida de solve_mean_field.
+    zt0_over_u : float
+        Parámetro z*t0/U.
+    mu : float
+        Potencial químico global.
+    g_eff : float
+        Acoplamiento efectivo luz-materia.
+    j_d_abs_sq : float
+        |J_D|^2.
+
+    Retorna
+    -------
+    eigvecs : np.ndarray
+        Matriz de autovectores columna (base completa).
+    eigvals_matrix : np.ndarray
+        Matriz diagonal con todos los autovalores.
+    ground_state : np.ndarray
+        Autovector del estado base.
+    """
+    (
+        _state_even,
+        _state_odd,
+        psi_even,
+        psi_odd,
+        rho_even,
+        rho_odd,
+        _e_even,
+        _e_odd,
+        _sigma_psi,
+        _delta_rho_abs,
+        _branch,
+    ) = mean_field_solution
+
+    t0 = (zt0_over_u / z) * U
+    delta_rho = 0.5 * (rho_odd - rho_even)
+
+    mu_odd = mu + 2.0 * g_eff * num_sites * j_d_abs_sq * delta_rho
+    mu_even = mu - 2.0 * g_eff * num_sites * j_d_abs_sq * delta_rho
+    U_odd = U + 2.0 * g_eff * j_d_abs_sq
+    U_even = U + 2.0 * g_eff * j_d_abs_sq
+
+    c_d_odd = 0.5 * num_sites * j_d_abs_sq * delta_rho * rho_odd - 0.5 * j_d_abs_sq * rho_odd**2
+    c_d_even = -0.5 * num_sites * j_d_abs_sq * delta_rho * rho_even - 0.5 * j_d_abs_sq * rho_even**2
+
+    b, b_dag, n_local, identity_local = _single_site_operators(n_max)
+
+    b_odd = np.kron(b, identity_local)
+    b_even = np.kron(identity_local, b)
+    b_odd_dag = b_odd.conj().T
+    b_even_dag = b_even.conj().T
+    n_odd_op = np.kron(n_local, identity_local)
+    n_even_op = np.kron(identity_local, n_local)
+    identity_full = np.eye((n_max + 1) ** 2, dtype=complex)
+
+    beta_op = (
+        np.conj(psi_odd) * b_even
+        + np.conj(psi_even) * b_odd
+        + psi_odd * b_even_dag
+        + psi_even * b_odd_dag
+        - (np.conj(psi_odd) * psi_even + psi_odd * np.conj(psi_even)) * identity_full
+    )
+
+    h_odd = (
+        -z * t0 * beta_op
+        - mu_odd * n_odd_op
+        + 0.5 * U_odd * (n_odd_op @ (n_odd_op - identity_full))
+        - g_eff * j_d_abs_sq * rho_odd * n_odd_op
+        - g_eff * c_d_odd * identity_full
+    )
+    h_even = (
+        -z * t0 * beta_op
+        - mu_even * n_even_op
+        + 0.5 * U_even * (n_even_op @ (n_even_op - identity_full))
+        - g_eff * j_d_abs_sq * rho_even * n_even_op
+        - g_eff * c_d_even * identity_full
+    )
+
+    h_eff = 0.5 * num_sites * (h_odd + h_even)
+
+    eigvals, eigvecs = np.linalg.eigh(h_eff)
+    eigvals_matrix = np.diag(eigvals)
+    ground_state = eigvecs[:, 0]
+
+    return eigvecs, eigvals_matrix, ground_state
+
+
 def plot_phase_diagrams(
     zt_values,
     rho_values,
@@ -403,5 +518,35 @@ if __name__ == "__main__":
     print("Energy_par, Energy_impar:", e_even, e_odd)
     print("SigmaPsi:", sigma_psi)
     print("abs(DeltaRho):", delta_rho)
+
+    # Test rápido: construcción y diagonalización del Hamiltoniano completo
+    full_solution = (
+        state_even,
+        state_odd,
+        psi_even,
+        psi_odd,
+        rho_even,
+        rho_odd,
+        e_even,
+        e_odd,
+        sigma_psi,
+        delta_rho,
+        branch,
+    )
+    g_eff_test = (-0.5 * 1.0) / 100.0  # consistente con geff_ns_over_u=-0.5, U=1, Ns=100
+    eigvecs, eigvals_matrix, ground_state = construct_full_basis(
+        mean_field_solution=full_solution,
+        zt0_over_u=0.10,
+        mu=0.4,
+        g_eff=g_eff_test,
+        j_d_abs_sq=1.0,
+        n_max=6,
+        num_sites=100,
+        z=4,
+        U=1.0,
+    )
+    print("Dimensión de la base completa:", eigvecs.shape[0])
+    print("Autovalor fundamental:", float(np.real(eigvals_matrix[0, 0])))
+    print("Norma del estado base:", float(np.linalg.norm(ground_state)))
 
     # plot_phase_diagrams(zt_vals, rho_vals)
